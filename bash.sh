@@ -30,10 +30,6 @@ sudo systemctl stop zerotier-one
 sudo bash -c 'echo "{ \"settings\": { \"controllerEnabled\": true } }" > /var/lib/zerotier-one/local.conf'
 sudo systemctl start zerotier-one
 
-# Generate ZeroTier API Token
-echo "Fetching ZeroTier API Token..."
-ZEROTIER_API_TOKEN=$(sudo cat /var/lib/zerotier-one/authtoken.secret)
-
 # Membuat Network ID Sendiri dengan 1 Root Server
 echo "Generating Self-Hosted ZeroTier Network..."
 sudo systemctl restart zerotier-one
@@ -103,44 +99,6 @@ sudo -u www-data wp option update woocommerce_enable_myaccount_checkout_registra
 sudo -u www-data wp option update theme_my_login_show_reg_link "1"
 sudo -u www-data wp option update theme_my_login_show_pass_link "1"
 
-# Instalasi dan Konfigurasi Plugin ZeroTier untuk WooCommerce
-echo "Installing ZeroTier WooCommerce Integration Plugin..."
-sudo mkdir -p /var/www/html/wp-content/plugins/zerotier-woocommerce
-sudo bash -c 'cat <<EOF > /var/www/html/wp-content/plugins/zerotier-woocommerce/zerotier-woocommerce.php
-<?php
-/**
- * Plugin Name: ZeroTier WooCommerce Integration
- * Description: Plugin untuk menghubungkan WooCommerce dengan ZeroTier VPN secara otomatis.
- * Version: 1.0
- * Author: Aksyanet
- */
-
-defined("ABSPATH") or die("No direct access allowed");
-
-function zerotier_webhook_handler(\$order_id) {
-    \$order = wc_get_order(\$order_id);
-    if (\$order->get_status() == 'completed') {
-        \$networkId = "$NETWORK_ID";
-        \$token = "$ZEROTIER_API_TOKEN";
-        \$controllerIP = "http://127.0.0.1:9993";
-        \$customer_email = \$order->get_billing_email();
-        \$nodeId = md5(\$customer_email);
-        update_user_meta(\$order->get_user_id(), "zerotier_node_id", \$nodeId);
-        \$url = "\$controllerIP/controller/network/\$networkId/member/\$nodeId";
-        \$data = json_encode(["config" => ["authorized" => true]]);
-        wp_remote_post(\$url, array(
-            'method' => 'POST',
-            'headers' => array(
-                'Authorization' => 'Bearer ' . \$token,
-                'Content-Type' => 'application/json'
-            ),
-            'body' => \$data
-        ));
-    }
-}
-add_action('woocommerce_order_status_completed', 'zerotier_webhook_handler');
-EOF'
-
 # Restart Apache agar semua layanan aktif
 echo "Restarting Apache..."
 sudo systemctl restart apache2
@@ -149,5 +107,3 @@ echo "Installation Complete!"
 echo "WordPress is available at: http://$DOMAIN_NAME/"
 echo "WordPress Admin: Username: $WP_ADMIN_USER, Password: $WP_ADMIN_PASSWORD"
 echo "ZeroTier Controller is now running on your VPS as a single-root server."
-echo "WooCommerce is installed and ZeroTier VPN management is ready!"
-echo "Customer Login & Registration is enabled!"
