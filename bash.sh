@@ -24,8 +24,8 @@ curl -s https://install.zerotier.com | sudo bash
 sudo systemctl enable zerotier-one
 sudo systemctl start zerotier-one
 
-# Konfigurasi ZeroTier sebagai Controller
-echo "Configuring ZeroTier Controller..."
+# Konfigurasi ZeroTier sebagai Controller (Moon / Root Server Single VPS)
+echo "Configuring ZeroTier as a Self-Hosted Controller..."
 sudo systemctl stop zerotier-one
 sudo bash -c 'echo "{ \"settings\": { \"controllerEnabled\": true } }" > /var/lib/zerotier-one/local.conf'
 sudo systemctl start zerotier-one
@@ -34,10 +34,29 @@ sudo systemctl start zerotier-one
 echo "Fetching ZeroTier API Token..."
 ZEROTIER_API_TOKEN=$(sudo cat /var/lib/zerotier-one/authtoken.secret)
 
-# Membuat Network ID Sendiri
+# Membuat Network ID Sendiri dengan 1 Root Server
 echo "Generating Self-Hosted ZeroTier Network..."
-sudo zerotier-cli orbit `cat /var/lib/zerotier-one/identity.public` `cat /var/lib/zerotier-one/identity.public`
+sudo systemctl restart zerotier-one
+sleep 5  # Tunggu beberapa detik agar ZeroTier siap
+sudo zerotier-cli info
+
+if [ $? -ne 0 ]; then
+    echo "Error: ZeroTier is not running properly!"
+    exit 1
+fi
+
+IDENTITY_PUBLIC=$(cat /var/lib/zerotier-one/identity.public)
+echo "Identity Public: $IDENTITY_PUBLIC"
+
+sudo zerotier-cli orbit $IDENTITY_PUBLIC $IDENTITY_PUBLIC
 NETWORK_ID=$(sudo zerotier-cli listnetworks | awk 'NR==2{print $3}')
+
+if [ -z "$NETWORK_ID" ]; then
+    echo "Error: Failed to retrieve ZeroTier Network ID"
+    exit 1
+fi
+
+echo "ZeroTier Network ID: $NETWORK_ID"
 
 # Install WordPress + WooCommerce
 echo "Installing WordPress..."
@@ -66,7 +85,15 @@ sudo mv wp-cli.phar wp
 echo "Setting up WordPress Admin..."
 cd /var/www/html
 sudo -u www-data wp core install --url="http://$DOMAIN_NAME" --title="Aksyanet VPN" --admin_user="$WP_ADMIN_USER" --admin_password="$WP_ADMIN_PASSWORD" --admin_email="admin@$DOMAIN_NAME"
+
+# Pastikan WooCommerce terinstal dengan benar
+echo "Installing and verifying WooCommerce installation..."
 sudo -u www-data wp plugin install woocommerce --activate
+if ! sudo -u www-data wp plugin is-active woocommerce; then
+    echo "WooCommerce activation failed. Retrying..."
+    sudo -u www-data wp plugin activate woocommerce
+fi
+
 sudo -u www-data wp plugin install theme-my-login --activate
 
 # Setup halaman login dan register
@@ -121,6 +148,6 @@ sudo systemctl restart apache2
 echo "Installation Complete!"
 echo "WordPress is available at: http://$DOMAIN_NAME/"
 echo "WordPress Admin: Username: $WP_ADMIN_USER, Password: $WP_ADMIN_PASSWORD"
-echo "ZeroTier Controller is now running on your VPS."
+echo "ZeroTier Controller is now running on your VPS as a single-root server."
 echo "WooCommerce is installed and ZeroTier VPN management is ready!"
 echo "Customer Login & Registration is enabled!"
