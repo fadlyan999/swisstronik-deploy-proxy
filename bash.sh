@@ -1,26 +1,32 @@
 #!/bin/bash
-# Script Otomatis Install Headscale + WordPress + WooCommerce + Dashboard Pelanggan
-# Pastikan dijalankan di VPS dengan Ubuntu 22.04
+# Script Instalasi Headscale Self-Hosted + WordPress + WooCommerce di VPS Ubuntu/Debian
+# Pastikan tidak ada kesalahan dalam instalasi ini
 
-set -e  # Hentikan jika ada error
+set -e  # Menghentikan script jika terjadi error
 
-# === 1. Update Sistem ===
-echo "Updating system..."
+# Variabel Konfigurasi
+MYSQL_ROOT_PASSWORD=$(openssl rand -base64 12)
+WP_DB_NAME="wordpress"
+WP_DB_USER="wp_user"
+WP_DB_PASSWORD=$(openssl rand -base64 12) # Generate password acak untuk database
+DOMAIN_NAME="aksyanet.my.id"
+WP_ADMIN_USER="admin"
+WP_ADMIN_PASSWORD="admin"
+
+# Update sistem dan install paket dasar
+echo "Updating system and installing required packages..."
 sudo apt update && sudo apt upgrade -y
+sudo apt install -y nginx mysql-server php php-mysql php-fpm php-curl unzip git sqlite3
 
-# === 2. Instalasi Dependensi ===
-echo "Installing SQLite..."
-sudo apt install -y sqlite3
-echo "Installing dependencies..."
-sudo apt install -y curl unzip nginx mysql-server php php-fpm php-mysql php-curl php-xml php-mbstring php-zip sqlite3
-
-# === 3. Instalasi Headscale ===
+# Install Headscale
 echo "Installing Headscale..."
-curl -fsSL https://github.com/juanfont/headscale/releases/download/v0.25.1/headscale_0.25.1_linux_amd64 -o headscale
+curl -fsSL https://github.com/juanfont/headscale/releases/latest/download/headscale-linux-amd64 -o headscale
 chmod +x headscale
 sudo mv headscale /usr/local/bin/
 mkdir -p /etc/headscale /var/lib/headscale
 
+# Konfigurasi Headscale
+echo "Configuring Headscale..."
 cat <<EOF | sudo tee /etc/headscale/config.yaml
 server_url: "http://\$(curl -s ifconfig.me):8080"
 listen_addr: "0.0.0.0:8080"
@@ -33,12 +39,12 @@ EOF
 
 sudo systemctl restart headscale || true
 
-# === 4. Setup Nginx Reverse Proxy ===
+# Setup Nginx Reverse Proxy
 echo "Setting up Nginx..."
 sudo tee /etc/nginx/sites-available/headscale <<EOF
 server {
     listen 80;
-    server_name headscale.aksyanet.my.id;
+    server_name headscale.$DOMAIN_NAME;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host \$host;
@@ -51,60 +57,56 @@ EOF
 ln -s /etc/nginx/sites-available/headscale /etc/nginx/sites-enabled/
 sudo systemctl restart nginx
 
-# === 5. Instalasi WordPress ===
+# Instalasi WordPress + WooCommerce
 echo "Installing WordPress..."
-cd /var/www/
-sudo rm -rf html && sudo mkdir html
-cd html
-sudo curl -O https://wordpress.org/latest.tar.gz
-sudo tar -xzf latest.tar.gz --strip-components=1
+cd /var/www/html
+sudo wget https://wordpress.org/latest.tar.gz
+sudo tar -xzvf latest.tar.gz
+sudo mv wordpress/* .
 sudo chown -R www-data:www-data /var/www/html
+sudo chmod -R 755 /var/www/html
 
-# === 6. Setup Database WordPress ===
-echo "Configuring MySQL..."
-DB_PASS=$(openssl rand -base64 16)
-sudo mysql -e "CREATE DATABASE wordpress;"
-sudo mysql -e "CREATE USER 'wpuser'@'localhost' IDENTIFIED BY '$DB_PASS';"
-sudo mysql -e "GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'localhost';"
+# Konfigurasi MySQL untuk WordPress
+echo "Configuring MySQL for WordPress..."
+sudo mysql -e "CREATE DATABASE $WP_DB_NAME;"
+sudo mysql -e "CREATE USER '$WP_DB_USER'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON $WP_DB_NAME.* TO '$WP_DB_USER'@'localhost';"
 sudo mysql -e "FLUSH PRIVILEGES;"
 
-# === 7. Konfigurasi WordPress ===
-cat <<EOF | sudo tee /var/www/html/wp-config.php
-<?php
-define('DB_NAME', 'wordpress');
-define('DB_USER', 'wpuser');
-define('DB_PASSWORD', '$DB_PASS');
-define('DB_HOST', 'localhost');
-define('DB_CHARSET', 'utf8');
-define('DB_COLLATE', '');
-define('WP_DEBUG', false);
-EOF
+# Instalasi WordPress CLI
+echo "Installing WP-CLI..."
+cd /usr/local/bin
+sudo curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+sudo chmod +x wp-cli.phar
+sudo mv wp-cli.phar wp
 
-# === 8. Install WooCommerce ===
-echo "Installing WooCommerce..."
-sudo -u www-data wp core install --path=/var/www/html --url="http://aksyanet.my.id" --title="SD-WAN Service" --admin_user="admin" --admin_password="admin" --admin_email="admin@aksyanet.my.id"
-sudo -u www-data wp plugin install woocommerce --activate --path=/var/www/html
+# Setup Admin WordPress dengan WP-CLI
+echo "Setting up WordPress Admin..."
+cd /var/www/html
+sudo -u www-data wp core install --url="http://$DOMAIN_NAME" --title="Aksyanet VPN" --admin_user="$WP_ADMIN_USER" --admin_password="$WP_ADMIN_PASSWORD" --admin_email="admin@$DOMAIN_NAME"
 
-# === 9. Setup User Registration + Dashboard ===
-echo "Setting up User Dashboard..."
-cat <<EOF | sudo tee /var/www/html/wp-content/plugins/headscale-dashboard.php
-<?php
-/**
- * Plugin Name: Headscale Dashboard
- * Description: Dashboard untuk pelanggan mengelola SD-WAN mereka.
- */
-if (!defined('ABSPATH')) exit;
-function headscale_dashboard() {
-    if (!is_user_logged_in()) return "<p>Silakan login untuk melihat dashboard Anda.</p>";
-    \$user = wp_get_current_user();
-    \$username = sanitize_user(explode('@', \$user->user_email)[0]);
-    \$device_list = shell_exec("headscale -u \$username nodes list | grep 'Name:' | awk '{print \$2}'");
-    return "<h3>Perangkat Terdaftar:</h3><pre>\$device_list</pre>";
-}
-add_shortcode('headscale_devices', 'headscale_dashboard');
-?>
-EOF
+# Pastikan WooCommerce terinstal dengan benar
+echo "Installing and verifying WooCommerce installation..."
+sudo -u www-data wp plugin install woocommerce --activate
+if ! sudo -u www-data wp plugin is-active woocommerce; then
+    echo "WooCommerce activation failed. Retrying..."
+    sudo -u www-data wp plugin activate woocommerce
+fi
 
+sudo -u www-data wp plugin install theme-my-login --activate
+
+# Setup halaman login dan register
+echo "Configuring Login & Registration Pages..."
+sudo -u www-data wp option update woocommerce_enable_myaccount_registration "yes"
+sudo -u www-data wp option update woocommerce_enable_myaccount_checkout_registration "yes"
+sudo -u www-data wp option update theme_my_login_show_reg_link "1"
+sudo -u www-data wp option update theme_my_login_show_pass_link "1"
+
+# Restart Nginx agar semua layanan aktif
+echo "Restarting Nginx..."
 sudo systemctl restart nginx
 
-echo "Installation Completed! Access your WordPress at http://aksyanet.my.id and configure WooCommerce payment gateway. Database password is stored securely."
+echo "Installation Complete!"
+echo "WordPress is available at: http://$DOMAIN_NAME/"
+echo "WordPress Admin: Username: $WP_ADMIN_USER, Password: $WP_ADMIN_PASSWORD"
+echo "Headscale Controller is now running on your VPS as a self-hosted SD-WAN service."
