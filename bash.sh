@@ -36,7 +36,7 @@ echo "Setting up Nginx..."
 sudo tee /etc/nginx/sites-available/headscale <<EOF
 server {
     listen 80;
-    server_name headscale.yourdomain.com;
+    server_name headscale.aksyanet.my.id;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host \$host;
@@ -80,7 +80,7 @@ EOF
 
 # === 8. Install WooCommerce ===
 echo "Installing WooCommerce..."
-sudo -u www-data wp core install --path=/var/www/html --url="http://yourdomain.com" --title="SD-WAN Service" --admin_user="admin" --admin_password="admin" --admin_email="admin@yourdomain.com"
+sudo -u www-data wp core install --path=/var/www/html --url="http://aksyanet.my.id" --title="SD-WAN Service" --admin_user="admin" --admin_password="admin" --admin_email="admin@aksyanet.my.id"
 sudo -u www-data wp plugin install woocommerce --activate --path=/var/www/html
 
 # === 9. Setup User Registration + Dashboard ===
@@ -105,4 +105,4 @@ EOF
 
 sudo systemctl restart nginx
 
-echo "Installation Completed! Access your WordPress at http://yourdomain.com and configure WooCommerce payment gateway. Database password is stored securely."
+echo "Installation Completed! Access your WordPress at http://aksyanet.my.id and configure WooCommerce payment gateway. Database password is stored securely."
