@@ -1,109 +1,108 @@
 #!/bin/bash
-# Script Instalasi ZeroTier Self-Hosted Controller + WordPress + WooCommerce di VPS Ubuntu/Debian
-# Pastikan tidak ada kesalahan dalam instalasi ini
+# Script Otomatis Install Headscale + WordPress + WooCommerce + Dashboard Pelanggan
+# Pastikan dijalankan di VPS dengan Ubuntu 22.04
 
-set -e  # Menghentikan script jika terjadi error
+set -e  # Hentikan jika ada error
 
-# Variabel Konfigurasi
-MYSQL_ROOT_PASSWORD=$(openssl rand -base64 12)
-WP_DB_NAME="wordpress"
-WP_DB_USER="wp_user"
-WP_DB_PASSWORD=$(openssl rand -base64 12) # Generate password acak untuk database
-DOMAIN_NAME="aksyanet.my.id"
-WP_ADMIN_USER=""
-WP_ADMIN_PASSWORD=""
-
-# Update sistem dan install paket dasar
-echo "Updating system and installing required packages..."
+# === 1. Update Sistem ===
+echo "Updating system..."
 sudo apt update && sudo apt upgrade -y
-sudo apt install apache2 mysql-server php php-mysql libapache2-mod-php php-curl curl unzip git -y
 
-# Install ZeroTier
-echo "Installing ZeroTier..."
-curl -s https://install.zerotier.com | sudo bash
-sudo systemctl enable zerotier-one
-sudo systemctl start zerotier-one
+# === 2. Instalasi Dependensi ===
+echo "Installing dependencies..."
+sudo apt install -y curl unzip git nginx mysql-server php php-fpm php-mysql php-curl php-xml php-mbstring php-zip
 
-# Konfigurasi ZeroTier sebagai Controller (Moon / Root Server Single VPS)
-echo "Configuring ZeroTier as a Self-Hosted Controller..."
-sudo systemctl stop zerotier-one
-sudo bash -c 'echo "{ \"settings\": { \"controllerEnabled\": true } }" > /var/lib/zerotier-one/local.conf'
-sudo systemctl start zerotier-one
+# === 3. Instalasi Headscale ===
+echo "Installing Headscale..."
+curl -fsSL https://github.com/juanfont/headscale/releases/latest/download/headscale-linux-amd64 -o headscale
+chmod +x headscale
+sudo mv headscale /usr/local/bin/
+mkdir -p /etc/headscale /var/lib/headscale
 
-# Membuat Network ID Sendiri dengan 1 Root Server
-echo "Generating Self-Hosted ZeroTier Network..."
-sudo systemctl restart zerotier-one
-sleep 5  # Tunggu beberapa detik agar ZeroTier siap
-sudo zerotier-cli info
+cat <<EOF | sudo tee /etc/headscale/config.yaml
+server_url: "http://\$(curl -s ifconfig.me):8080"
+listen_addr: "0.0.0.0:8080"
+log_level: "info"
+database:
+  type: "sqlite"
+  sqlite:
+    path: "/var/lib/headscale/db.sqlite"
+EOF
 
-if [ $? -ne 0 ]; then
-    echo "Error: ZeroTier is not running properly!"
-    exit 1
-fi
+sudo systemctl restart headscale || true
 
-IDENTITY_PUBLIC=$(cat /var/lib/zerotier-one/identity.public)
-echo "Identity Public: $IDENTITY_PUBLIC"
+# === 4. Setup Nginx Reverse Proxy ===
+echo "Setting up Nginx..."
+sudo tee /etc/nginx/sites-available/headscale <<EOF
+server {
+    listen 80;
+    server_name headscale.yourdomain.com;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
 
-sudo zerotier-cli orbit $IDENTITY_PUBLIC $IDENTITY_PUBLIC
-NETWORK_ID=$(sudo zerotier-cli listnetworks | awk 'NR==2{print $3}')
+ln -s /etc/nginx/sites-available/headscale /etc/nginx/sites-enabled/
+sudo systemctl restart nginx
 
-if [ -z "$NETWORK_ID" ]; then
-    echo "Error: Failed to retrieve ZeroTier Network ID"
-    exit 1
-fi
-
-echo "ZeroTier Network ID: $NETWORK_ID"
-
-# Install WordPress + WooCommerce
+# === 5. Instalasi WordPress ===
 echo "Installing WordPress..."
-cd /var/www/html
-sudo wget https://wordpress.org/latest.tar.gz
-sudo tar -xzvf latest.tar.gz
-sudo mv wordpress/* .
+cd /var/www/
+sudo rm -rf html && sudo mkdir html
+cd html
+sudo curl -O https://wordpress.org/latest.tar.gz
+sudo tar -xzf latest.tar.gz --strip-components=1
 sudo chown -R www-data:www-data /var/www/html
-sudo chmod -R 755 /var/www/html
 
-# Konfigurasi MySQL untuk WordPress
-echo "Configuring MySQL for WordPress..."
-sudo mysql -e "CREATE DATABASE $WP_DB_NAME;"
-sudo mysql -e "CREATE USER '$WP_DB_USER'@'localhost' IDENTIFIED BY '$WP_DB_PASSWORD';"
-sudo mysql -e "GRANT ALL PRIVILEGES ON $WP_DB_NAME.* TO '$WP_DB_USER'@'localhost';"
+# === 6. Setup Database WordPress ===
+echo "Configuring MySQL..."
+DB_PASS=$(openssl rand -base64 16)
+sudo mysql -e "CREATE DATABASE wordpress;"
+sudo mysql -e "CREATE USER 'wpuser'@'localhost' IDENTIFIED BY '$DB_PASS';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'localhost';"
 sudo mysql -e "FLUSH PRIVILEGES;"
 
-# Instalasi WordPress CLI untuk setup admin
-echo "Installing WP-CLI..."
-cd /usr/local/bin
-sudo curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-sudo chmod +x wp-cli.phar
-sudo mv wp-cli.phar wp
+# === 7. Konfigurasi WordPress ===
+cat <<EOF | sudo tee /var/www/html/wp-config.php
+<?php
+define('DB_NAME', 'wordpress');
+define('DB_USER', 'wpuser');
+define('DB_PASSWORD', '$DB_PASS');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8');
+define('DB_COLLATE', '');
+define('WP_DEBUG', false);
+EOF
 
-# Setup Admin WordPress dengan WP-CLI
-echo "Setting up WordPress Admin..."
-cd /var/www/html
-sudo -u www-data wp core install --url="http://$DOMAIN_NAME" --title="Aksyanet VPN" --admin_user="$WP_ADMIN_USER" --admin_password="$WP_ADMIN_PASSWORD" --admin_email="admin@$DOMAIN_NAME"
+# === 8. Install WooCommerce ===
+echo "Installing WooCommerce..."
+sudo -u www-data wp core install --path=/var/www/html --url="http://yourdomain.com" --title="SD-WAN Service" --admin_user="admin" --admin_password="admin" --admin_email="admin@yourdomain.com"
+sudo -u www-data wp plugin install woocommerce --activate --path=/var/www/html
 
-# Pastikan WooCommerce terinstal dengan benar
-echo "Installing and verifying WooCommerce installation..."
-sudo -u www-data wp plugin install woocommerce --activate
-if ! sudo -u www-data wp plugin is-active woocommerce; then
-    echo "WooCommerce activation failed. Retrying..."
-    sudo -u www-data wp plugin activate woocommerce
-fi
+# === 9. Setup User Registration + Dashboard ===
+echo "Setting up User Dashboard..."
+cat <<EOF | sudo tee /var/www/html/wp-content/plugins/headscale-dashboard.php
+<?php
+/**
+ * Plugin Name: Headscale Dashboard
+ * Description: Dashboard untuk pelanggan mengelola SD-WAN mereka.
+ */
+if (!defined('ABSPATH')) exit;
+function headscale_dashboard() {
+    if (!is_user_logged_in()) return "<p>Silakan login untuk melihat dashboard Anda.</p>";
+    \$user = wp_get_current_user();
+    \$username = sanitize_user(explode('@', \$user->user_email)[0]);
+    \$device_list = shell_exec("headscale -u \$username nodes list | grep 'Name:' | awk '{print \$2}'");
+    return "<h3>Perangkat Terdaftar:</h3><pre>\$device_list</pre>";
+}
+add_shortcode('headscale_devices', 'headscale_dashboard');
+?>
+EOF
 
-sudo -u www-data wp plugin install theme-my-login --activate
+sudo systemctl restart nginx
 
-# Setup halaman login dan register
-echo "Configuring Login & Registration Pages..."
-sudo -u www-data wp option update woocommerce_enable_myaccount_registration "yes"
-sudo -u www-data wp option update woocommerce_enable_myaccount_checkout_registration "yes"
-sudo -u www-data wp option update theme_my_login_show_reg_link "1"
-sudo -u www-data wp option update theme_my_login_show_pass_link "1"
-
-# Restart Apache agar semua layanan aktif
-echo "Restarting Apache..."
-sudo systemctl restart apache2
-
-echo "Installation Complete!"
-echo "WordPress is available at: http://$DOMAIN_NAME/"
-echo "WordPress Admin: Username: $WP_ADMIN_USER, Password: $WP_ADMIN_PASSWORD"
-echo "ZeroTier Controller is now running on your VPS as a single-root server."
+echo "Installation Completed! Access your WordPress at http://yourdomain.com and configure WooCommerce payment gateway. Database password is stored securely."
