@@ -16,7 +16,7 @@ sudo apt install -y curl unzip nginx mysql-server php php-fpm php-mysql php-curl
 
 # === 3. Instalasi Headscale ===
 echo "Installing Headscale..."
-curl -fsSL https://github.com/juanfont/headscale/releases/latest/download/headscale-linux-amd64 -o headscale
+curl -fsSL https://github.com/juanfont/headscale/releases/download/v0.25.1/headscale_0.25.1_linux_amd64 -o headscale
 chmod +x headscale
 sudo mv headscale /usr/local/bin/
 mkdir -p /etc/headscale /var/lib/headscale
