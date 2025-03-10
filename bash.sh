@@ -9,8 +9,10 @@ echo "Updating system..."
 sudo apt update && sudo apt upgrade -y
 
 # === 2. Instalasi Dependensi ===
+echo "Installing SQLite..."
+sudo apt install -y sqlite3
 echo "Installing dependencies..."
-sudo apt install -y curl unzip git nginx mysql-server php php-fpm php-mysql php-curl php-xml php-mbstring php-zip
+sudo apt install -y curl unzip nginx mysql-server php php-fpm php-mysql php-curl php-xml php-mbstring php-zip sqlite3
 
 # === 3. Instalasi Headscale ===
 echo "Installing Headscale..."
